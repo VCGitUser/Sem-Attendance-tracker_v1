@@ -6,24 +6,33 @@ import streamlit as st
 # Set up clean browser window configurations
 st.set_page_config(page_title="Semester Attendance Tracker", layout="wide")
 
-# ─── PASSWORD SECURITY BLOCK AT THE TOP ───
+# ─── UPGRADED ACCESS & ROLE CONTROL BLOCK ───
 def check_password():
-    """Returns True if the user had the correct password."""
+    """Returns True if the user enters a valid passcode, and assigns a role."""
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
+        st.session_state.user_role = "viewer"  # Default fallback
 
-    # If password is already verified, bypass the lock screen
+    # If already logged in, bypass screen
     if st.session_state.password_correct:
         return True
 
-    # Show the login form input fields
     st.subheader("🔒 Secure Portal Access Required")
     user_password = st.text_input("Enter Passcode:", type="password")
     
     if st.button("Verify Key"):
-        # We link this to Streamlit's encrypted cloud system secrets manager
-        if user_password == st.secrets["access_password"]:
+        # Fetch codes safely from your Streamlit encrypted secrets manager
+        admin_key = st.secrets["access_password"]
+        # Fallback to a default or check for a viewer secret
+        viewer_key = st.secrets.get("viewer_password", "view123") 
+        
+        if user_password == admin_key:
             st.session_state.password_correct = True
+            st.session_state.user_role = "admin"
+            st.rerun()
+        elif user_password == viewer_key:
+            st.session_state.password_correct = True
+            st.session_state.user_role = "viewer"
             st.rerun()
         else:
             st.error("❌ Invalid Key. Access Denied.")
@@ -37,7 +46,8 @@ if not check_password():
 
 # App Banner Header
 st.title("🎈 Student-Supervisor Attendance Portal")
-st.markdown("Collaborative Web Dashboard for Academic Term Monitoring")
+role_badge = "🛠️ ADMIN ACCESS" if st.session_state.user_role == "admin" else "👁️ READ-ONLY ACCESS"
+st.markdown(f"Collaborative Web Dashboard for Academic Term Monitoring | **Current Role:** `{role_badge}`")
 st.divider()
 
 # GLOBAL CONSTANT - Linked to your actual uploaded tracking version
@@ -68,8 +78,8 @@ try:
     if "working_df" not in st.session_state:
         st.session_state.working_df = base_df.copy()
 
-    # 3. INTERACTIVE STATE TRACKER INTERCEPTOR
-    if "attendance_editor" in st.session_state and st.session_state.attendance_editor:
+    # 3. INTERACTIVE STATE TRACKER INTERCEPTOR (Only loops changes if user is admin)
+    if st.session_state.user_role == "admin" and "attendance_editor" in st.session_state and st.session_state.attendance_editor:
         changes_detected = st.session_state.attendance_editor["edited_rows"]
         if changes_detected:
             for row_idx, changes in changes_detected.items():
@@ -99,17 +109,15 @@ try:
         
     st.divider()
     
-    # 6. UPGRADED: Subject-Wise Sidebar Breakdown Grid with Present and Absent metrics
+    # 6. Subject-Wise Sidebar Breakdown Grid
     st.sidebar.header("🎯 Subject Metrics Tracker")
     st.sidebar.markdown("---")
     
     subjects = ["UEC3361", "UGE3386", "UEC3301", "UEC3302", "UEC3303", "UMA3362", "LAB"]
     for subj in subjects:
-        # Calculate individual metrics dynamically
         subj_present = ((active_df["Course Module"] == subj) & (active_df["Attendance Log (P/A/L)"] == "P")).sum()
         subj_absent = ((active_df["Course Module"] == subj) & (active_df["Attendance Log (P/A/L)"] == "A")).sum()
         
-        # Display each subject as a distinct clean card block
         st.sidebar.subheader(f"📘 {subj}")
         sb_col1, sb_col2 = st.sidebar.columns(2)
         with sb_col1:
@@ -120,12 +128,20 @@ try:
         
     # 7. INTERACTIVE DATA GRID FOR COLLABORATION
     st.subheader("🗓️ Academic Calendar Ledger Logs")
-    st.info("💡 Double-click any cell in the green column to log attendance. The metrics will adjust instantly.")
     
-    # Render editable spreadsheet linked directly to state memory
+    # Dynamic guidance label depending on access rights
+    if st.session_state.user_role == "admin":
+        st.info("💡 Double-click any cell in the green column to log attendance. The metrics will adjust instantly.")
+        disabled_columns = ["Date", "Day", "Period Slot", "Start Time", "End Time", "Course Module"]
+    else:
+        st.warning("🔒 You are in View-Only mode. Editing has been restricted.")
+        # If viewer, lock down all columns entirely
+        disabled_columns = active_df.columns.tolist()
+    
+    # Render spreadsheet grid
     edited_output = st.data_editor(
         active_df,
-        disabled=["Date", "Day", "Period Slot", "Start Time", "End Time", "Course Module"],
+        disabled=disabled_columns,
         column_config={
             "Attendance Log (P/A/L)": st.column_config.SelectboxColumn(
                 "Attendance Log (P/A/L)",
@@ -143,38 +159,47 @@ try:
         key="attendance_editor"
     )
 
-    # 8. COMMIT PERMANENT SAVE ACTION
-    st.divider()
-    if st.button("💾 Save System Changes permanently"):
-        import openpyxl
-        wb = openpyxl.load_workbook(TARGET_EXCEL_FILE)
-        ws = wb["Attendance Ledger"]
+    # 8. ROLE PROTECTION: HIDE MANAGEMENT PANEL FROM VIEWERS
+    if st.session_state.user_role == "admin":
+        st.divider()
+        st.subheader("🛠️ Administrative Controls")
         
-        # Safely map entries down to columns G and H row by row
-        for idx, row in active_df.iterrows():
-            excel_row = 14 + idx
-            ws.cell(row=excel_row, column=7, value=row["Attendance Log (P/A/L)"])
-            ws.cell(row=excel_row, column=8, value=row["Comments / Reason for Absence"])
-            
-        wb.save(TARGET_EXCEL_FILE)
-        st.success(f"Attendance ledger modifications saved to the cloud application temporary database!")
-        st.cache_data.clear() # Clear cache so changes populate on page reload
+        admin_col1, admin_col2 = st.columns(2)
         
-    # 9. NEW: LOCAL HARD DRIVE DOWNLOAD WIDGET [1]
-    if os.path.exists(TARGET_EXCEL_FILE):
-        with open(TARGET_EXCEL_FILE, "rb") as file:
-            file_bytes = file.read()
-            st.download_button(
-                label="📥 Download Updated Excel File to Local Computer",
-                data=file_bytes,
-                file_name=TARGET_EXCEL_FILE,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        with admin_col1:
+            if st.button("💾 Save System Changes permanently", use_container_width=True):
+                import openpyxl
+                wb = openpyxl.load_workbook(TARGET_EXCEL_FILE)
+                ws = wb["Attendance Ledger"]
+                
+                for idx, row in active_df.iterrows():
+                    excel_row = 14 + idx
+                    ws.cell(row=excel_row, column=7, value=row["Attendance Log (P/A/L)"])
+                    ws.cell(row=excel_row, column=8, value=row["Comments / Reason for Absence"])
+                    
+                wb.save(TARGET_EXCEL_FILE)
+                st.success(f"Attendance ledger modifications saved to cloud temporary database!")
+                st.cache_data.clear()
+                
+        with admin_col2:
+            if st.button("🔄 Reset Memory (Discard Unsaved Edits)", use_container_width=True):
+                if "working_df" in st.session_state:
+                    del st.session_state.working_df
+                st.cache_data.clear()
+                st.rerun()
+                
+        st.markdown("---")
+        # 9. LOCAL HARD DRIVE DOWNLOAD WIDGET (Admin Only)
+        if os.path.exists(TARGET_EXCEL_FILE):
+            with open(TARGET_EXCEL_FILE, "rb") as file:
+                file_bytes = file.read()
+                st.download_button(
+                    label="📥 Download Updated Excel File to Local Computer",
+                    data=file_bytes,
+                    file_name=TARGET_EXCEL_FILE,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
 except FileNotFoundError:
     st.error(f"⚠️ Error: Could not locate your base tracking Excel file ({TARGET_EXCEL_FILE}) in the active repository path.")
-    
-    # Auto-Diagnosis display to quickly spot misaligned folder setups
-    st.info("🔍 **Directory Inspector Tool:** Here are the exact files detected in your GitHub working folder right now:")
-    current_files = os.listdir('.')
-    st.write(current_files)

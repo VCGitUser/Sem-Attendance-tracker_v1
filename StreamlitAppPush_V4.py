@@ -227,3 +227,24 @@ try:
                 st.cache_data.clear()
                 
         with admin_col2:
+            if st.button("🔄 Reset Memory (Discard Unsaved Edits)", use_container_width=True):
+                if "working_df" in st.session_state:
+                    del st.session_state.working_df
+                st.cache_data.clear()
+                st.rerun()
+                
+        st.markdown("---")
+        # 9. LOCAL HARD DRIVE DOWNLOAD WIDGET (Admin Only)
+        if os.path.exists(TARGET_EXCEL_FILE):
+            with open(TARGET_EXCEL_FILE, "rb") as file:
+                file_bytes = file.read()
+                st.download_button(
+                    label="📥 Download Updated Excel File to Local Computer",
+                    data=file_bytes,
+                    file_name=TARGET_EXCEL_FILE,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+except FileNotFoundError:
+    st.error(f"⚠️ Error: Could not locate your base tracking Excel file ({TARGET_EXCEL_FILE}) in the active repository path.")

@@ -96,7 +96,7 @@ try:
     rate = (total_attended / total_conducted) if total_conducted > 0 else 0.0
     status_text = "ELIGIBLE ✅" if rate >= 0.75 else "SHORTAGE ⚠️"
     
-    # 5. RENDER GLOBAL METRICS AT TOP OF PAGE
+    # 5. RENDER GLOBAL METRICS & DYNAMIC VISUAL ALERTS AT TOP OF PAGE
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric(label="Total Sessions Conducted", value=int(total_conducted))
@@ -107,6 +107,12 @@ try:
     with col4:
         st.metric(label="Running Attendance Rate", value=f"{rate:.1%}", delta=status_text, delta_color="normal" if rate >= 0.75 else "inverse")
         
+    # Live Visual Warning Block
+    if rate < 0.75:
+        st.error(f"⚠️ **Attendance Shortage Alert:** The running attendance rate (`{rate:.1%}`) has dropped below the required **75.0%** threshold. Action may be required to maintain eligibility.")
+    else:
+        st.success(f"✅ **Status Safe:** Attendance requirement met (`{rate:.1%}`). Currently clear of shortages.")
+
     st.divider()
     
     # 6. Subject-Wise Sidebar Breakdown Grid

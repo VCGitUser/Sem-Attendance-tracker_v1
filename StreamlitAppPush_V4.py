@@ -1,12 +1,13 @@
 import os
 import io
+import datetime
 import pandas as pd
 import streamlit as st
 
 # Set up clean browser window configurations
 st.set_page_config(page_title="Semester Attendance Tracker", layout="wide")
 
-# ─── UPGRADED ACCESS & ROLE CONTROL BLOCK ───
+# ─── ACCESS & ROLE CONTROL BLOCK ───
 def check_password():
     """Returns True if the user enters a valid passcode, and assigns a role."""
     if "password_correct" not in st.session_state:
@@ -23,7 +24,6 @@ def check_password():
     if st.button("Verify Key"):
         # Fetch codes safely from your Streamlit encrypted secrets manager
         admin_key = st.secrets["access_password"]
-        # Fallback to a default or check for a viewer secret
         viewer_key = st.secrets.get("viewer_password", "view123") 
         
         if user_password == admin_key:
@@ -78,7 +78,7 @@ try:
     if "working_df" not in st.session_state:
         st.session_state.working_df = base_df.copy()
 
-    # 3. INTERACTIVE STATE TRACKER INTERCEPTOR (Only loops changes if user is admin)
+    # 3. INTERACTIVE STATE TRACKER INTERCEPTOR
     if st.session_state.user_role == "admin" and "attendance_editor" in st.session_state and st.session_state.attendance_editor:
         changes_detected = st.session_state.attendance_editor["edited_rows"]
         if changes_detected:
@@ -129,13 +129,11 @@ try:
     # 7. INTERACTIVE DATA GRID FOR COLLABORATION
     st.subheader("🗓️ Academic Calendar Ledger Logs")
     
-    # Dynamic guidance label depending on access rights
     if st.session_state.user_role == "admin":
         st.info("💡 Double-click any cell in the green column to log attendance. The metrics will adjust instantly.")
         disabled_columns = ["Date", "Day", "Period Slot", "Start Time", "End Time", "Course Module"]
     else:
         st.warning("🔒 You are in View-Only mode. Editing has been restricted.")
-        # If viewer, lock down all columns entirely
         disabled_columns = active_df.columns.tolist()
     
     # Render spreadsheet grid
@@ -159,7 +157,7 @@ try:
         key="attendance_editor"
     )
 
-    # 8. ROLE PROTECTION: HIDE MANAGEMENT PANEL FROM VIEWERS
+    # 8. UPGRADED: COMMIT PERMANENT SAVE ACTION WITH AUDIT LOGGING
     if st.session_state.user_role == "admin":
         st.divider()
         st.subheader("🛠️ Administrative Controls")
@@ -172,34 +170,60 @@ try:
                 wb = openpyxl.load_workbook(TARGET_EXCEL_FILE)
                 ws = wb["Attendance Ledger"]
                 
+                # Check or initialize the "Change History" sheet inside the Excel workbook
+                if "Change History" not in wb.sheetnames:
+                    ws_history = wb.create_sheet(title="Change History")
+                    ws_history.append(["Timestamp", "Excel Row Index", "Course Module", "Field Modified", "Old Value", "New Value"])
+                else:
+                    ws_history = wb["Change History"]
+                
+                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                logged_changes_count = 0
+                
+                # ─── GRANULAR CELL-BY-CELL COMPARISON ENGINE ───
                 for idx, row in active_df.iterrows():
                     excel_row = 14 + idx
-                    ws.cell(row=excel_row, column=7, value=row["Attendance Log (P/A/L)"])
-                    ws.cell(row=excel_row, column=8, value=row["Comments / Reason for Absence"])
                     
+                    # Columns to audit check
+                    columns_to_check = {
+                        "Attendance Log (P/A/L)": 7,
+                        "Comments / Reason for Absence": 8
+                    }
+                    
+                    for col_name, col_num in columns_to_check.items():
+                        new_val = str(row[col_name]).strip()
+                        old_val = str(base_df.at[idx, col_name]).strip()
+                        
+                        # If a real structural shift occurred in text content, record it
+                        if new_val != old_val:
+                            # 1. Update primary attendance tracker cell data
+                            ws.cell(row=excel_row, column=col_num, value=row[col_name])
+                            
+                            # 2. Append cell-level metrics row into the History sheet
+                            ws_history.append([
+                                now_str, 
+                                f"Row {excel_row}", 
+                                row.get("Course Module", "N/A"), 
+                                col_name, 
+                                old_val if old_val else "[Blank Entry]", 
+                                new_val if new_val else "[Cleared Entry]"
+                            ])
+                            logged_changes_count += 1
+                
+                # Fallback safeguard: if user hits save without modifying text, execute baseline save
+                if logged_changes_count == 0:
+                    for idx, row in active_df.iterrows():
+                        excel_row = 14 + idx
+                        ws.cell(row=excel_row, column=7, value=row["Attendance Log (P/A/L)"])
+                        ws.cell(row=excel_row, column=8, value=row["Comments / Reason for Absence"])
+                
                 wb.save(TARGET_EXCEL_FILE)
-                st.success(f"Attendance ledger modifications saved to cloud temporary database!")
+                
+                if logged_changes_count > 0:
+                    st.success(f"🎉 Ledger stored! {logged_changes_count} individual cell changes successfully logged inside the 'Change History' sheet.")
+                else:
+                    st.success("Attendance ledger saved. No text modifications detected since last snapshot.")
+                
                 st.cache_data.clear()
                 
         with admin_col2:
-            if st.button("🔄 Reset Memory (Discard Unsaved Edits)", use_container_width=True):
-                if "working_df" in st.session_state:
-                    del st.session_state.working_df
-                st.cache_data.clear()
-                st.rerun()
-                
-        st.markdown("---")
-        # 9. LOCAL HARD DRIVE DOWNLOAD WIDGET (Admin Only)
-        if os.path.exists(TARGET_EXCEL_FILE):
-            with open(TARGET_EXCEL_FILE, "rb") as file:
-                file_bytes = file.read()
-                st.download_button(
-                    label="📥 Download Updated Excel File to Local Computer",
-                    data=file_bytes,
-                    file_name=TARGET_EXCEL_FILE,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-
-except FileNotFoundError:
-    st.error(f"⚠️ Error: Could not locate your base tracking Excel file ({TARGET_EXCEL_FILE}) in the active repository path.")
